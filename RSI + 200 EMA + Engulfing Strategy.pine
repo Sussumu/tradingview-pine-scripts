@@ -1,0 +1,92 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © gkato
+// based on this video from Trade Pro (https://www.youtube.com/watch?v=AM52D58vGQk)
+
+//@version=4
+strategy("RSI + 200 EMA + Engulfing", overlay = true, initial_capital = 1000, default_qty_value = 0.1, commission_type = strategy.commission.percent, commission_value = 0.1, pyramiding = 10)
+
+// backtesting dates
+startDate = input(title="Start Date", type=input.integer, defval=1, minval=1, maxval=31)
+startMonth = input(title="Start Month", type=input.integer, defval=9, minval=1, maxval=12)
+startYear = input(title="Start Year", type=input.integer, defval=2021, minval=2000, maxval=9999)
+validStrategyDate = (time >= timestamp(syminfo.timezone, startYear, startMonth, startDate, 0, 0))
+
+// currentBar
+sourceBar = input(close)
+
+// indicators
+ema200 = ema(close, 200)
+bullishEngulfing = open[1] > close[1] ? close > open ? close >= open[1] ? close[1] >= open ? close - open > open[1] - close[1] ? true : false : false : false : false : false
+bearishEngulfing = close[1] > open[1] ? open > close ? open >= close[1] ? open[1] >= close ? open - close > close[1] - open[1] ? true : false : false : false : false : false
+
+// stochastic RSI
+smoothK = input(3, "K", minval = 1)
+smoothD = input(3, "D", minval = 1)
+RSILength = input(14, "RSI length", minval = 1)
+StochasticLength = input(14, "Stochastic Length", minval = 1)
+myRsi = rsi(sourceBar, RSILength)
+k = sma(stoch(myRsi, myRsi, myRsi, StochasticLength), smoothK)
+d = sma(k, smoothD)
+
+// trends
+bullishTrend = bullishEngulfing and ema200 < sourceBar and k > 50
+bearishTrend = bearishEngulfing and ema200 > sourceBar and k < 50
+
+// bar colors
+barcolor(bullishEngulfing ? color.blue : na)
+barcolor(bearishEngulfing ? color.silver : na)
+
+// trade labels
+if bullishTrend
+    label.new(bar_index, low, yloc = yloc.belowbar, color = color.lime, style = label.style_triangleup, size = size.tiny, text = "long")
+if bearishTrend
+    label.new(bar_index, high, yloc = yloc.abovebar, color = color.fuchsia, style = label.style_triangledown, size = size.tiny, text = "short")
+
+// base line for trading
+plot(series=ema200, color = color.blue)
+
+// ------------------------- //
+//       strategy area       //
+// ------------------------- //
+
+// customizable trailing stop loss
+longTrailingStopPercentage = input(title = "Long Trailing Stop Loss (%)", type = input.float, minval = 0.0, step = 0.1, defval = 3.0) * 0.01
+shortTrailingStopLossPercentage = input(title = "Short Trailing Stop Loss (%)", type = input.float, minval = 0.0, step = 0.1, defval = 3.0) * 0.01
+
+longStopPrice = 0.0
+longStopPrice := if (strategy.position_size > 0)
+    stopValue = close * (1 - longTrailingStopPercentage)
+    max(stopValue, longStopPrice[1])
+else
+    0
+    
+shortStopPrice = 0.0
+
+shortStopPrice := if (strategy.position_size < 0)
+    stopValue = close * (1 + shortTrailingStopLossPercentage)
+    min(stopValue, shortStopPrice[1])
+else
+    999999
+    
+// strategy entry
+if bullishTrend and validStrategyDate
+    strategy.entry(id = "long", long = true)
+if bearishTrend and validStrategyDate
+    strategy.entry(id = "short", long = false)
+
+// strategy exit by taking enough profit
+// sets profit at double of the variation of the last engulfing candle
+if (strategy.position_size > 0)
+    lastVariationInTicks = (close - open) / 0.1
+    takeProfitExitPosition = lastVariationInTicks
+    strategy.exit(id = "exit long", from_entry = "long", profit = takeProfitExitPosition)
+if (strategy.position_size < 0)
+    lastVariationInTicks = (open - close) / 0.1
+    takeProfitExitPosition = -lastVariationInTicks * 2
+    strategy.exit(id = "exit short", from_entry = "short", profit = takeProfitExitPosition)
+    
+// strategy exit by trailing stop loss
+if (strategy.position_size > 0)
+    strategy.exit(id="XL TRL STP", stop=longStopPrice)
+if (strategy.position_size < 0)
+    strategy.exit(id="XS TRL STP", stop=shortStopPrice)
